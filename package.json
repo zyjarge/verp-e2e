@@ -1,0 +1,20 @@
+{
+  "name": "verp-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Verp 端到端 UI 测试套件（Playwright，独立仓库）",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:ui": "playwright test --ui",
+    "test:debug": "playwright test --debug",
+    "test:codegen": "playwright codegen https://verpapi.duodutech.com",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.4.0",
+    "typescript": "^5.6.0"
+  }
+}

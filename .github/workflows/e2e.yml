@@ -1,0 +1,84 @@
+name: E2E (Playwright)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # 在 CI 里覆盖指向你的测试环境域名（按你的回答 4-A）
+      VERP_WEB_URL: ${{ secrets.VERP_WEB_URL }}
+      VERP_E2E_USER: ${{ secrets.VERP_E2E_USER }}
+      VERP_E2E_PASSWORD: ${{ secrets.VERP_E2E_PASSWORD }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 安装 Playwright 浏览器
+        run: npx playwright install --with-deps chromium
+
+      # 启动被测目标 —— 按你的明确要求，CI 由 workflow 负责拉起。
+      # 这里给出两种模式的样板（择一启用，按你的部署方式二选一）：
+      #
+      # 模式 A：被测程序部署在 verpapi.duodutech.com（公网/内网已部署好）
+      #   → 跳过启动步骤，直接跑测试
+      #
+      # 模式 B：CI runner 本地起 Verp 后端 + 前端
+      #   → 把下面注释块打开
+      #
+      # - name: Checkout Verp
+      #   uses: actions/checkout@v4
+      #   with:
+      #     repository: DuoDuCharles/Verp
+      #     path: Verp
+      # - name: Setup .NET
+      #   uses: actions/setup-dotnet@v4
+      #   with:
+      #     dotnet-version: '8.0.x'
+      # - name: dotnet restore
+      #   run: dotnet restore Verp/DuoDuTechVERP.sln
+      # - name: 起后端
+      #   run: |
+      #     cd Verp
+      #     ASPNETCORE_ENVIRONMENT=Staging \
+      #     ASPNETCORE_URLS=http://localhost:5000 \
+      #       dotnet run --project src/DuoDuTechVERP.Api --no-launch-profile &
+      #     npx wait-on http://localhost:5000/swagger/index.html -t 120000
+      # - name: 起前端
+      #   run: |
+      #     cd Verp/clients/pc-admin
+      #     npm ci
+      #     npm run dev &
+      #     npx wait-on http://localhost:5173 -t 60000
+      # - uses: vercel/await-on-action@v1   # 兜底起一下端口等待
+      #   with:
+      #     url: http://localhost:5173
+      #     timeout: 60000
+
+      - name: 跑 Playwright
+        run: npx playwright test
+
+      - name: 上传报告（失败也上传）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report
+            test-results
+          retention-days: 14
