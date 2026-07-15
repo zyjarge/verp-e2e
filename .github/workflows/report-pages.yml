@@ -44,40 +44,42 @@ jobs:
       - name: 拼装站点结构
         run: |
           RUN_ID="${{ github.event.workflow_run.id }}"
-          COMMIT="${{ github.event.workflow_run.head_sha }}"
-          CONCLUSION="${{ github.event.workflow_run.conclusion }}"
-          CREATED="${{ github.event.workflow_run.created_at }}"
 
           mkdir -p site/runs
           mkdir -p "site/runs/${RUN_ID}"
-          cp -r report/* "site/runs/${RUN_ID}/"
 
-          # 生成索引页（按时间倒序，简单 HTML）
-          cat > site/index.html <<EOF
+          # artifact 解压后结构是 report/playwright-report/... 和 report/test-results/...
+          # 把 playwright-report 下的内容直接铺到 runs/<id>/，让 index.html 落在期望位置
+          if [ -d report/playwright-report ]; then
+            cp -r report/playwright-report/. "site/runs/${RUN_ID}/"
+          fi
+          if [ -d report/test-results ]; then
+            mkdir -p "site/runs/${RUN_ID}/test-results"
+            cp -r report/test-results/. "site/runs/${RUN_ID}/test-results/"
+          fi
+
+          # 索引页
+          cat > site/index.html <<'HEADER'
           <!DOCTYPE html>
           <html><head><meta charset="utf-8"><title>Verp E2E Reports</title>
           <style>body{font-family:sans-serif;max-width:900px;margin:40px auto;padding:0 20px}
           table{border-collapse:collapse;width:100%}
           td,th{border:1px solid #ddd;padding:8px;text-align:left}
-          .failure{color:#b00;font-weight:bold}
-          .success{color:green}
-          </style></head><body>
+          a{color:#1d76db}</style></head><body>
           <h1>Verp E2E Reports</h1>
           <p>每次 E2E workflow 跑完会自动部署到这里。issue 里的链接格式：<code>https://zyjarge.github.io/verp-e2e/runs/&lt;run-id&gt;/</code></p>
-          <table><thead><tr><th>Run</th><th>Commit</th><th>Result</th><th>Created</th><th>Report</th></tr></thead><tbody>
-          EOF
+          <table><thead><tr><th>Run</th><th>Report</th></tr></thead><tbody>
+          HEADER
 
-          # 遍历 site/runs/ 下所有 run-id
           for d in site/runs/*/; do
             [ -d "$d" ] || continue
             RID=$(basename "$d")
-            # 从 commit-info.csv 或 GitHub API 拿元数据；这里用文件名约定
-            echo "<tr><td>${RID}</td><td colspan=4><a href='runs/${RID}/'>open report</a></td></tr>" >> site/index.html
+            echo "<tr><td>${RID}</td><td><a href='runs/${RID}/'>open report</a></td></tr>" >> site/index.html
           done
 
-          cat >> site/index.html <<EOF
+          cat >> site/index.html <<'FOOTER'
           </tbody></table></body></html>
-          EOF
+          FOOTER
 
       - name: 配置 Pages
         uses: actions/configure-pages@v5
