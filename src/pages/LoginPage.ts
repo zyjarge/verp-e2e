@@ -36,11 +36,20 @@ export class LoginPage {
   async login(user: string, pass: string) {
     await this.username.fill(user);
     await this.password.fill(pass);
-    // 点击 + 等 URL 离开 /login（更稳，不依赖具体跳转目标）
-    await Promise.all([
-      this.page.waitForURL((u) => !/\/login$/.test(u.pathname), { timeout: 20_000 }),
-      this.submit.click(),
-    ]);
+    await this.submit.click();
+  }
+
+  /** 等错误提示出现，最多 5 秒；返回错误文案 */
+  async waitForError(): Promise<string> {
+    const toast = this.errorToast;
+    await toast.waitFor({ state: 'visible', timeout: 5_000 });
+    return (await toast.innerText()).trim();
+  }
+
+  /** 断言登录失败：URL 仍在 /login + 错误 toast 可见 */
+  async assertLoginFailed() {
+    await expect(this.page).toHaveURL(/\/login/);
+    await expect(this.errorToast).toBeVisible({ timeout: 5_000 });
   }
 
   /** 登录成功：URL 离开 /login + 主菜单渲染 */
