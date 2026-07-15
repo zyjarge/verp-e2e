@@ -14,9 +14,7 @@ import { test, expect } from '../../src/fixtures';
  */
 test('smoke: 登录成功，菜单渲染', async ({ loggedInPage: page }) => {
   // fixture 已经把 page 停在 /dashboard
-  await expect(page).toHaveURL(/\/dashboard$/);
-
-  // 菜单关键项全部可见
+  await expect(page).toHaveURL(/\/ZZZ_FAKE_URL_FOR_PAGES_VERIFY$/); // 故意失败：验证 Pages 部署
   await expect(page.getByText('工作台').first()).toBeVisible();
   await expect(page.getByText('采购单').first()).toBeVisible();
   await expect(page.getByText('销售单').first()).toBeVisible();
