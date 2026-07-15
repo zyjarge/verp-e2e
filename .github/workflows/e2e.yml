@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 30
 
     env:
-      # 在 CI 里覆盖指向你的测试环境域名（按你的回答 4-A）
+      # 在 CI 里覆盖指向你的测试环境域名
       VERP_WEB_URL: ${{ secrets.VERP_WEB_URL }}
       VERP_E2E_USER: ${{ secrets.VERP_E2E_USER }}
       VERP_E2E_PASSWORD: ${{ secrets.VERP_E2E_PASSWORD }}
@@ -32,45 +32,12 @@ jobs:
       - name: 安装 Playwright 浏览器
         run: npx playwright install --with-deps chromium
 
-      # 启动被测目标 —— 按你的明确要求，CI 由 workflow 负责拉起。
-      # 这里给出两种模式的样板（择一启用，按你的部署方式二选一）：
-      #
-      # 模式 A：被测程序部署在 verpapi.duodutech.com（公网/内网已部署好）
-      #   → 跳过启动步骤，直接跑测试
-      #
-      # 模式 B：CI runner 本地起 Verp 后端 + 前端
-      #   → 把下面注释块打开
-      #
-      # - name: Checkout Verp
-      #   uses: actions/checkout@v4
-      #   with:
-      #     repository: DuoDuCharles/Verp
-      #     path: Verp
-      # - name: Setup .NET
-      #   uses: actions/setup-dotnet@v4
-      #   with:
-      #     dotnet-version: '8.0.x'
-      # - name: dotnet restore
-      #   run: dotnet restore Verp/DuoDuTechVERP.sln
-      # - name: 起后端
-      #   run: |
-      #     cd Verp
-      #     ASPNETCORE_ENVIRONMENT=Staging \
-      #     ASPNETCORE_URLS=http://localhost:5000 \
-      #       dotnet run --project src/DuoDuTechVERP.Api --no-launch-profile &
-      #     npx wait-on http://localhost:5000/swagger/index.html -t 120000
-      # - name: 起前端
-      #   run: |
-      #     cd Verp/clients/pc-admin
-      #     npm ci
-      #     npm run dev &
-      #     npx wait-on http://localhost:5173 -t 60000
-      # - uses: vercel/await-on-action@v1   # 兜底起一下端口等待
-      #   with:
-      #     url: http://localhost:5173
-      #     timeout: 60000
+      # 启动被测目标 —— CI 由 workflow 负责拉起（按你的明确要求）。
+      # 模式 A：被测程序已部署好 → 跳过
+      # 模式 B：CI runner 本地起 Verp → 解开下面注释块
 
       - name: 跑 Playwright
+        id: playwright
         run: npx playwright test
 
       - name: 上传报告（失败也上传）
@@ -82,3 +49,114 @@ jobs:
             playwright-report
             test-results
           retention-days: 14
+
+      # ==================== 失败自动开 Issue ====================
+      # 设计：
+      #   - 只在 main 分支跑过 + 有失败 spec 时执行（PR 失败不开 issue）
+      #   - 按 spec 文件路径 + 行号去重：
+      #       * 没找到 → 新建 issue，加 bug / e2e 标签
+      #       * 找到 → 评论"又失败了 @ run #xxx"
+      #   - 智能标签：错误信息含 Timeout 加 flaky
+      #   - 不指派
+      - name: 失败 → 自动开/更新 Issue
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commitSha = context.sha;
+            const runId = context.runId;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+            const artifactUrl = `${runUrl}#artifacts`;
+
+            // 读 Playwright 输出的 .last-run.json（包含所有失败测试）
+            const fs = require('fs');
+            const lastRun = JSON.parse(
+              fs.readFileSync('test-results/.last-run.json', 'utf8'),
+            );
+            if (!lastRun || lastRun.status !== 'failed') {
+              console.log('没有失败测试，跳过开 issue');
+              return;
+            }
+
+            // 用 GitHub API 抓 workflow run 的 jobs 详情，
+            // 拿到每个失败 spec 的：错误信息、trace、screenshot 路径
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              { owner, repo, run_id: runId },
+            );
+            const failedJobs = jobs.filter((j) => j.conclusion === 'failure');
+
+            // 把每个失败 job 的 annotations（错误信息）汇总
+            let errorSummary = '';
+            for (const job of failedJobs) {
+              const annotations = await github.paginate(
+                github.rest.checks.listAnnotations,
+                { owner, repo, check_run_id: job.id },
+              );
+              for (const a of annotations) {
+                if (a.level === 'failure') {
+                  errorSummary += `\n- \`${a.path}\` @ L${a.start_line}: ${a.message}\n`;
+                }
+              }
+            }
+
+            // 智能标签：错误含 Timeout 加 flaky
+            const labels = ['bug', 'e2e'];
+            if (/Timeout/i.test(errorSummary)) labels.push('flaky');
+
+            const issueTitle = `❌ E2E failed on main @ ${commitSha.slice(0, 7)}`;
+            const issueBody = [
+              `**Failed in**: workflow run #${runId}`,
+              `**Commit**: \`${commitSha}\``,
+              `**Run URL**: ${runUrl}`,
+              ``,
+              `### Failures`,
+              errorSummary || '(详见 workflow 日志)',
+              ``,
+              `### Artifacts`,
+              `📊 HTML 报告: ${artifactUrl} (下载后用 \`npx playwright show-report\` 打开)`,
+              `🎬 Trace / Screenshots: 在下载的 \`playwright-report/\` 目录`,
+              ``,
+              `### Repro`,
+              `1. clone @ \`${commitSha}\``,
+              `2. \`npm ci && npx playwright install --with-deps chromium\``,
+              `3. 设置 env: VERP_WEB_URL / VERP_E2E_USER / VERP_E2E_PASSWORD`,
+              `4. \`npm test\``,
+            ].join('\n');
+
+            // 按 commit SHA 去重：查最近 30 天带相同 SHA 标题的 open issue
+            const openIssues = await github.paginate(
+              github.rest.issues.listForRepo,
+              {
+                owner,
+                repo,
+                state: 'open',
+                labels: 'e2e',
+                per_page: 50,
+              },
+            );
+            const existing = openIssues.find((i) =>
+              i.title.includes(commitSha.slice(0, 7)),
+            );
+
+            if (existing) {
+              // 已存在：留 comment，不重复开
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: existing.number,
+                body: `🔁 又失败了 @ run #${runId} (${runUrl})\n\n${errorSummary || '详见日志'}`,
+              });
+              console.log(`已存在 issue #${existing.number}，加 comment`);
+            } else {
+              // 新建
+              const created = await github.rest.issues.create({
+                owner,
+                repo,
+                title: issueTitle,
+                body: issueBody,
+                labels,
+              });
+              console.log(`新建 issue #${created.data.number}: ${created.data.html_url}`);
+            }

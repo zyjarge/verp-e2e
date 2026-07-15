@@ -95,6 +95,22 @@ test('你的场景', async ({ loggedInPage: page }) => {
 - `VERP_WEB_URL`：被测 URL
 - `VERP_E2E_USER` / `VERP_E2E_PASSWORD`：登录账号
 
+## 失败自动开 Issue
+
+CI workflow 集成了"失败 → 自动创建 / 更新 GitHub Issue"：
+
+- **触发条件**：push 到 `main` 分支 + workflow 失败
+- **去重策略**：按 commit SHA 7 位前缀查已有 open issue
+  - 没找到 → 新建 issue，标题 `❌ E2E failed on main @ <sha7>`
+  - 找到 → 在已有 issue 下评论"又失败了 @ run #xxx"
+- **标签**：`bug` + `e2e`；若错误信息含 `Timeout` 额外加 `flaky`
+- **issue 内容**：commit / run URL / 错误位置 / artifact 下载链接 / 复现步骤
+
+第一次跑前需要：
+
+1. GitHub repo → Settings → Labels 里有 `bug` 和 `e2e` 两个标签（没有就在 Issues 页面手动建一下，否则 `issues.create` 报错）
+2. workflow 有默认 `GITHUB_TOKEN` 权限，但创建/更新 issue 需要勾选 **Settings → Actions → General → Workflow permissions → Read and write permissions**
+
 ## 故障排查
 
 | 现象 | 原因 | 处理 |
