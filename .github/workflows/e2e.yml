@@ -145,40 +145,28 @@ jobs:
               i.title.includes(commitSha.slice(0, 7)),
             );
 
-            // 工具：上传 PNG 到 issue（GitHub Media API 要求 raw binary，不是 JSON）
-            async function uploadScreenshot(issueN, pngPath) {
-              const content = fs.readFileSync(pngPath);
-              const token = process.env.GITHUB_TOKEN;
-              const res = await fetch(
-                `https://api.github.com/repos/${owner}/${repo}/issues/${issueN}/media`,
-                {
-                  method: 'POST',
-                  headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Accept': 'application/vnd.github+json',
-                    'X-GitHub-Api-Version': '2022-11-28',
-                    'Content-Type': 'application/octet-stream',
-                  },
-                  body: content,
-                },
-              );
-              if (!res.ok) {
-                const txt = await res.text();
-                throw new Error(`HTTP ${res.status} ${res.statusText}: ${txt.slice(0, 200)}`);
-              }
-              return await res.json();  // { url, name, type, size, dimensions, ... }
-            }
-
             let issueNumber;
             if (existing) {
               issueNumber = existing.number;
+              // 评论"又失败了"
               let comment = `🔁 又失败了 @ run #${runId} (${runUrl})\n\n📊 [报告](${pagesBase}/)\n\n${errorSummary || '详见报告'}`;
+              // 顺便上传新截图到该 issue
               for (const png of screenshots) {
                 try {
-                  const r = await uploadScreenshot(issueNumber, png);
-                  comment += `\n\n![fail](${r.url})`;
+                  const content = fs.readFileSync(png, { encoding: 'base64' });
+                  const uploaded = await github.request(
+                    'POST /repos/{owner}/{repo}/issues/{issue_number}/media',
+                    {
+                      owner, repo, issue_number: issueNumber,
+                      mediaType: { format: 'png', content },
+                      data: content,
+                      headers: { 'content-type': 'application/octet-stream' },
+                    },
+                  );
+                  const url = uploaded.data.upload_url || uploaded.data.url || uploaded.data;
+                  comment += `\n\n![fail](${url})`;
                 } catch (e) {
-                  console.log(`上传截图失败 ${png}: ${e.message}`);
+                  console.log(`上传截图失败: ${e.message}`);
                 }
               }
               await github.rest.issues.createComment({
@@ -186,19 +174,31 @@ jobs:
               });
               console.log(`已存在 issue #${issueNumber}，加 comment（附 ${screenshots.length} 张图）`);
             } else {
+              // 新建
               const created = await github.rest.issues.create({
                 owner, repo, title: issueTitle, body: issueBody, labels,
               });
               issueNumber = created.data.number;
               console.log(`新建 issue #${issueNumber}`);
 
+              // 上传每张失败截图到 issue，更新 body
               const mdImages = [];
               for (const png of screenshots) {
                 try {
-                  const r = await uploadScreenshot(issueNumber, png);
+                  const content = fs.readFileSync(png, { encoding: 'base64' });
+                  const uploaded = await github.request(
+                    'POST /repos/{owner}/{repo}/issues/{issue_number}/media',
+                    {
+                      owner, repo, issue_number: issueNumber,
+                      mediaType: { format: 'png', content },
+                      data: content,
+                      headers: { 'content-type': 'application/octet-stream' },
+                    },
+                  );
+                  const url = uploaded.data.upload_url || uploaded.data.url || uploaded.data;
                   const name = path.basename(png);
-                  mdImages.push(`![${name}](${r.url})`);
-                  console.log(`  上传 ${name} → ${r.url.slice(0, 80)}`);
+                  mdImages.push(`![${name}](${url})`);
+                  console.log(`  上传 ${name} → ${typeof url === 'string' ? url.slice(0, 80) : url}`);
                 } catch (e) {
                   console.log(`上传截图失败 ${png}: ${e.message}`);
                 }
