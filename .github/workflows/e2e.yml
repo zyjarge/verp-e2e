@@ -64,8 +64,6 @@ jobs:
             const artifactUrl = `${runUrl}#artifacts`;
 
             const fs = require('fs');
-            const path = require('path');
-
             const lastRun = JSON.parse(
               fs.readFileSync('test-results/.last-run.json', 'utf8'),
             );
@@ -74,28 +72,12 @@ jobs:
               return;
             }
 
-            // 收集所有失败 spec 的 test-failed-*.png
-            const screenshots = [];
-            function walk(dir) {
-              if (!fs.existsSync(dir)) return;
-              for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-                const full = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                  walk(full);
-                } else if (/^test-failed-\d+\.png$/.test(entry.name)) {
-                  screenshots.push(full);
-                }
-              }
-            }
-            walk('test-results');
-            console.log(`[issue] 找到 ${screenshots.length} 张失败截图`);
-
-            // 用 jobs API 汇总错误信息
             const jobs = await github.paginate(
               github.rest.actions.listJobsForWorkflowRun,
               { owner, repo, run_id: runId },
             );
             const failedJobs = jobs.filter((j) => j.conclusion === 'failure');
+
             let errorSummary = '';
             for (const job of failedJobs) {
               const annotations = await github.paginate(
@@ -113,9 +95,7 @@ jobs:
             if (/Timeout/i.test(errorSummary)) labels.push('flaky');
 
             const issueTitle = `❌ E2E failed on main @ ${commitSha.slice(0, 7)}`;
-
-            // 构造 issue body（先不带截图，拿到 issue_number 再补）
-            let issueBody = [
+            const issueBody = [
               `**Failed in**: workflow run #${runId}`,
               `**Commit**: \`${commitSha}\``,
               `**Run URL**: ${runUrl}`,
@@ -136,7 +116,6 @@ jobs:
               `> 注：HTML 报告由 report-pages workflow 异步部署，可能延迟 1-2 分钟`,
             ].join('\n');
 
-            // 去重
             const openIssues = await github.paginate(
               github.rest.issues.listForRepo,
               { owner, repo, state: 'open', labels: 'e2e', per_page: 50 },
@@ -145,69 +124,19 @@ jobs:
               i.title.includes(commitSha.slice(0, 7)),
             );
 
-            let issueNumber;
             if (existing) {
-              issueNumber = existing.number;
-              // 评论"又失败了"
-              let comment = `🔁 又失败了 @ run #${runId} (${runUrl})\n\n📊 [报告](${pagesBase}/)\n\n${errorSummary || '详见报告'}`;
-              // 顺便上传新截图到该 issue
-              for (const png of screenshots) {
-                try {
-                  const content = fs.readFileSync(png, { encoding: 'base64' });
-                  const uploaded = await github.request(
-                    'POST /repos/{owner}/{repo}/issues/{issue_number}/media',
-                    {
-                      owner, repo, issue_number: issueNumber,
-                      mediaType: { format: 'png', content },
-                      data: content,
-                      headers: { 'content-type': 'application/octet-stream' },
-                    },
-                  );
-                  const url = uploaded.data.upload_url || uploaded.data.url || uploaded.data;
-                  comment += `\n\n![fail](${url})`;
-                } catch (e) {
-                  console.log(`上传截图失败: ${e.message}`);
-                }
-              }
               await github.rest.issues.createComment({
-                owner, repo, issue_number: issueNumber, body: comment,
+                owner, repo,
+                issue_number: existing.number,
+                body: `🔁 又失败了 @ run #${runId} (${runUrl})\n\n📊 [报告](${pagesBase}/)\n\n${errorSummary || '详见报告'}`,
               });
-              console.log(`已存在 issue #${issueNumber}，加 comment（附 ${screenshots.length} 张图）`);
+              console.log(`已存在 issue #${existing.number}，加 comment`);
             } else {
-              // 新建
               const created = await github.rest.issues.create({
-                owner, repo, title: issueTitle, body: issueBody, labels,
+                owner, repo,
+                title: issueTitle,
+                body: issueBody,
+                labels,
               });
-              issueNumber = created.data.number;
-              console.log(`新建 issue #${issueNumber}`);
-
-              // 上传每张失败截图到 issue，更新 body
-              const mdImages = [];
-              for (const png of screenshots) {
-                try {
-                  const content = fs.readFileSync(png, { encoding: 'base64' });
-                  const uploaded = await github.request(
-                    'POST /repos/{owner}/{repo}/issues/{issue_number}/media',
-                    {
-                      owner, repo, issue_number: issueNumber,
-                      mediaType: { format: 'png', content },
-                      data: content,
-                      headers: { 'content-type': 'application/octet-stream' },
-                    },
-                  );
-                  const url = uploaded.data.upload_url || uploaded.data.url || uploaded.data;
-                  const name = path.basename(png);
-                  mdImages.push(`![${name}](${url})`);
-                  console.log(`  上传 ${name} → ${typeof url === 'string' ? url.slice(0, 80) : url}`);
-                } catch (e) {
-                  console.log(`上传截图失败 ${png}: ${e.message}`);
-                }
-              }
-              if (mdImages.length > 0) {
-                issueBody += `\n\n### Screenshots\n\n${mdImages.join('\n\n')}`;
-                await github.rest.issues.update({
-                  owner, repo, issue_number: issueNumber, body: issueBody,
-                });
-                console.log(`issue #${issueNumber} body 已追加 ${mdImages.length} 张截图`);
-              }
+              console.log(`新建 issue #${created.data.number}: ${created.data.html_url}`);
             }
